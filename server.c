@@ -23,6 +23,10 @@ int main()
     char *headers = "Content-Type: text/html\r\n\r\n";
     char *response_body = "<html><p>aek</p></html>";
 
+    FILE *fp;
+    long lSize;
+    char *buffer;
+
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_INET;     
     hints.ai_socktype = SOCK_STREAM; 
@@ -54,12 +58,23 @@ int main()
             send(new_fd, status_line, strlen(status_line), 0);
             send(new_fd, headers, strlen(headers), 0);
 
-            FILE *index_file = fopen("index.html", "r");
-            char c;
-            while ((c = getc(index_file)) != EOF)
-            {
-                send(new_fd, &c, 1, 0);
-            }
+            fp = fopen("index.html", "rb");
+            if( !fp ) perror("index.html"),exit(1);
+
+            fseek( fp , 0L , SEEK_END);
+            lSize = ftell( fp );
+            rewind( fp );
+
+            buffer = calloc( 1, lSize+1 );
+            if( !buffer ) fclose(fp),fputs("memory alloc fails",stderr),exit(1);
+
+            if( 1!=fread( buffer , lSize, 1 , fp) )
+            fclose(fp),free(buffer),fputs("entire read fails",stderr),exit(1);
+
+            send(new_fd, buffer, lSize, 0);
+
+            fclose(fp);
+            free(buffer);
         }
 
         close(new_fd);
