@@ -35,25 +35,16 @@ int main(void)
 
     psa_crypto_init();
 
-    /*
-     * 1. Seed the RNG
-     */
+    // 1. Seed the RNG
     mbedtls_printf("  . Seeding the random number generator...");
     fflush(stdout);
 
     mbedtls_printf(" ok\n");
 
-    /*
-     * 2. Load the certificates and private RSA key
-     */
+    // 2. Load the certificates and private RSA key
     mbedtls_printf("\n  . Loading the server cert. and key...");
     fflush(stdout);
 
-    /*
-     * This demonstration program uses embedded test certificates.
-     * Instead, you may want to use mbedtls_x509_crt_parse_file() to read the
-     * server and CA certificates, as well as mbedtls_pk_parse_keyfile().
-     */
     ret = mbedtls_x509_crt_parse(&srvcert, (const unsigned char *) mbedtls_test_srv_crt,
                                  mbedtls_test_srv_crt_len);
     if (ret != 0) {
@@ -77,10 +68,8 @@ int main(void)
 
     mbedtls_printf(" ok\n");
 
-    /*
-     * 3. Setup the listening TCP socket
-     */
-    mbedtls_printf("  . Bind on https://localhost:4433/ ...");
+    // 3. Setup the listening TCP socket
+    mbedtls_printf("  . Bind on https://localhost:3490/ ...");
     fflush(stdout);
 
     if ((ret = mbedtls_net_bind(&listen_fd, NULL, "3490", MBEDTLS_NET_PROTO_TCP)) != 0) {
@@ -90,9 +79,7 @@ int main(void)
 
     mbedtls_printf(" ok\n");
 
-    /*
-     * 4. Setup stuff
-     */
+    // 4. Setup stuff
     mbedtls_printf("  . Setting up the SSL data....");
     fflush(stdout);
 
@@ -130,9 +117,7 @@ reset:
 
     mbedtls_ssl_session_reset(&ssl);
 
-    /*
-     * 3. Wait until a client connects
-     */
+    // 4. Wait until a client connects
     mbedtls_printf("  . Waiting for a remote connection ...");
     fflush(stdout);
 
@@ -146,9 +131,7 @@ reset:
 
     mbedtls_printf(" ok\n");
 
-    /*
-     * 5. Handshake
-     */
+    // 5. Handshake
     mbedtls_printf("  . Performing the SSL/TLS handshake...");
     fflush(stdout);
 
@@ -161,9 +144,7 @@ reset:
 
     mbedtls_printf(" ok\n");
 
-    /*
-     * 6. Read the HTTP Request
-     */
+    // 6. Read the HTTP Request
     mbedtls_printf("  < Read from client:");
     fflush(stdout);
 
@@ -202,9 +183,7 @@ reset:
         }
     } while (1);
 
-    /*
-     * 7. Write the 200 Response
-     */
+    // 7. Write the 200 Response
     mbedtls_printf("  > Write to client:");
     fflush(stdout);
 
