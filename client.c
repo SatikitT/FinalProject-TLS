@@ -43,10 +43,7 @@ int main( void )
 
     len = ret;
     printf( " %d bytes written\n\n%s", len, (char *) buf );
-
-    /*
-     * Read the HTTP response
-     */
+    
     printf( "  < Read from server:" );
     fflush( stdout );
     do
@@ -67,13 +64,7 @@ int main( void )
     while( 1 );
 
 exit:
-
     close( server_fd );
-
-#ifdef WIN32
-    printf( "  + Press Enter to exit this program.\n" );
-    fflush( stdout ); getchar();
-#endif
 
     return( ret );
 }
