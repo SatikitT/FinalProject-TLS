@@ -1,245 +1,149 @@
-
-#include "mbedtls/platform.h"
-
-#include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
-#include "mbedtls/x509.h"
-#include "mbedtls/ssl.h"
+#include "mbedtls/platform.h"
 #include "mbedtls/net_sockets.h"
+#include "mbedtls/ssl.h"
+#include "mbedtls/x509_crt.h"
+#include "mbedtls/pk.h"
 #include "mbedtls/error.h"
-#include "certs.h"
+#include "psa/crypto.h"
 
-#define HTTP_RESPONSE \
-    "HTTP/1.0 200 OK\r\nContent-Type: text/html\r\n\r\n" \
-    "<h2>Mbed TLS Test Server</h2>\r\n" \
-    "<p>Successful connection using: %s</p>\r\n"
+#define PORT "3490"
 
 int main(void)
 {
-    int ret, len;
-    mbedtls_net_context listen_fd, client_fd;
-    unsigned char buf[1024];
+    int ret = 0;
+
+    mbedtls_net_context listen_fd;
+    mbedtls_net_context client_fd;
 
     mbedtls_ssl_context ssl;
     mbedtls_ssl_config conf;
-    mbedtls_x509_crt srvcert;
-    mbedtls_pk_context pkey;
+
+    mbedtls_x509_crt cert;
+    mbedtls_pk_context key;
+
+    unsigned char buffer[2048];
+
+    psa_status_t status;
+
+    const char response[] = "HTTP/1.1 200 OK\r\n"
+                            "Content-Type: text/html\r\n\r\n"
+                            "<html><p>aek</p></html>\r\n";
 
     mbedtls_net_init(&listen_fd);
     mbedtls_net_init(&client_fd);
+
     mbedtls_ssl_init(&ssl);
     mbedtls_ssl_config_init(&conf);
-    mbedtls_x509_crt_init(&srvcert);
-    mbedtls_pk_init(&pkey);
 
-    psa_crypto_init();
+    mbedtls_x509_crt_init(&cert);
+    mbedtls_pk_init(&key);
 
-    // 1. Seed the RNG
-    mbedtls_printf("  . Seeding the random number generator...");
-    fflush(stdout);
-
-    mbedtls_printf(" ok\n");
-
-    // 2. Load the certificates and private RSA key
-    mbedtls_printf("\n  . Loading the server cert. and key...");
-    fflush(stdout);
-
-    ret = mbedtls_x509_crt_parse(&srvcert, (const unsigned char *) mbedtls_test_srv_crt,
-                                 mbedtls_test_srv_crt_len);
-    if (ret != 0) {
-        mbedtls_printf(" failed\n  !  mbedtls_x509_crt_parse returned %d\n\n", ret);
+    if (status != psa_crypto_init())
+    {
+        printf("psa_crypto_init failed %d\n", (int) status);
+        ret = 1;
         goto exit;
     }
 
-    ret = mbedtls_x509_crt_parse(&srvcert, (const unsigned char *) mbedtls_test_cas_pem,
-                                 mbedtls_test_cas_pem_len);
-    if (ret != 0) {
-        mbedtls_printf(" failed\n  !  mbedtls_x509_crt_parse returned %d\n\n", ret);
+    if ((ret = mbedtls_x509_crt_parse_file( &cert, "certs/server.crt")) != 0)
+    {
         goto exit;
     }
 
-    ret =  mbedtls_pk_parse_key(&pkey, (const unsigned char *) mbedtls_test_srv_key,
-                                mbedtls_test_srv_key_len, NULL, 0);
-    if (ret != 0) {
-        mbedtls_printf(" failed\n  !  mbedtls_pk_parse_key returned %d\n\n", ret);
+    if ((ret = mbedtls_pk_parse_keyfile( &key, "certs/server.key", NULL)) != 0)
+    {
         goto exit;
     }
 
-    mbedtls_printf(" ok\n");
-
-    // 3. Setup the listening TCP socket
-    mbedtls_printf("  . Bind on https://localhost:3490/ ...");
-    fflush(stdout);
-
-    if ((ret = mbedtls_net_bind(&listen_fd, NULL, "3490", MBEDTLS_NET_PROTO_TCP)) != 0) {
-        mbedtls_printf(" failed\n  ! mbedtls_net_bind returned %d\n\n", ret);
+    if ((ret = mbedtls_ssl_config_defaults( &conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT)) != 0)
+    {
         goto exit;
     }
 
-    mbedtls_printf(" ok\n");
-
-    // 4. Setup stuff
-    mbedtls_printf("  . Setting up the SSL data....");
-    fflush(stdout);
-
-    if ((ret = mbedtls_ssl_config_defaults(&conf,
-                                           MBEDTLS_SSL_IS_SERVER,
-                                           MBEDTLS_SSL_TRANSPORT_STREAM,
-                                           MBEDTLS_SSL_PRESET_DEFAULT)) != 0) {
-        mbedtls_printf(" failed\n  ! mbedtls_ssl_config_defaults returned %d\n\n", ret);
+    if ((ret = mbedtls_ssl_conf_own_cert( &conf, &cert, &key)) != 0)
+    {
         goto exit;
     }
 
-    mbedtls_ssl_conf_ca_chain(&conf, srvcert.next, NULL);
-    if ((ret = mbedtls_ssl_conf_own_cert(&conf, &srvcert, &pkey)) != 0) {
-        mbedtls_printf(" failed\n  ! mbedtls_ssl_conf_own_cert returned %d\n\n", ret);
+    if ((ret = mbedtls_ssl_setup( &ssl, &conf)) != 0)
+    {
         goto exit;
     }
 
-    if ((ret = mbedtls_ssl_setup(&ssl, &conf)) != 0) {
-        mbedtls_printf(" failed\n  ! mbedtls_ssl_setup returned %d\n\n", ret);
+    if ((ret = mbedtls_net_bind(&listen_fd, NULL, PORT, MBEDTLS_NET_PROTO_TCP)) != 0)
+    {
         goto exit;
     }
 
-    mbedtls_printf(" ok\n");
+    printf("Server running on\n");
+    printf("https://localhost:%s/\n", PORT);
+    printf("Wait for client\n");
 
-reset:
-#ifdef MBEDTLS_ERROR_C
-    if (ret != 0) {
-        char error_buf[100];
-        mbedtls_strerror(ret, error_buf, 100);
-        mbedtls_printf("Last error was: %d - %s\n\n", ret, error_buf);
-    }
-#endif
-
-    mbedtls_net_free(&client_fd);
-
-    mbedtls_ssl_session_reset(&ssl);
-
-    // 4. Wait until a client connects
-    mbedtls_printf("  . Waiting for a remote connection ...");
-    fflush(stdout);
-
-    if ((ret = mbedtls_net_accept(&listen_fd, &client_fd,
-                                  NULL, 0, NULL)) != 0) {
-        mbedtls_printf(" failed\n  ! mbedtls_net_accept returned %d\n\n", ret);
+    if ((ret = mbedtls_net_accept( &listen_fd, &client_fd, NULL, 0, NULL)) != 0)
+    {
         goto exit;
     }
 
-    mbedtls_ssl_set_bio(&ssl, &client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+    mbedtls_ssl_set_bio( &ssl, &client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
 
-    mbedtls_printf(" ok\n");
+    printf("TLS handshake\n");
 
-    // 5. Handshake
-    mbedtls_printf("  . Performing the SSL/TLS handshake...");
-    fflush(stdout);
-
-    while ((ret = mbedtls_ssl_handshake(&ssl)) != 0) {
-        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-            mbedtls_printf(" failed\n  ! mbedtls_ssl_handshake returned %d\n\n", ret);
-            goto reset;
-        }
-    }
-
-    mbedtls_printf(" ok\n");
-
-    // 6. Read the HTTP Request
-    mbedtls_printf("  < Read from client:");
-    fflush(stdout);
-
-    do {
-        len = sizeof(buf) - 1;
-        memset(buf, 0, sizeof(buf));
-        ret = mbedtls_ssl_read(&ssl, buf, len);
-
-        if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
-            continue;
-        }
-
-        if (ret <= 0) {
-            switch (ret) {
-                case MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY:
-                    mbedtls_printf(" connection was closed gracefully\n");
-                    break;
-
-                case MBEDTLS_ERR_NET_CONN_RESET:
-                    mbedtls_printf(" connection was reset by peer\n");
-                    break;
-
-                default:
-                    mbedtls_printf(" mbedtls_ssl_read returned -0x%x\n", (unsigned int) -ret);
-                    break;
-            }
-
-            break;
-        }
-
-        len = ret;
-        mbedtls_printf(" %d bytes read\n\n%s", len, (char *) buf);
-
-        if (ret > 0) {
-            break;
-        }
-    } while (1);
-
-    // 7. Write the 200 Response
-    mbedtls_printf("  > Write to client:");
-    fflush(stdout);
-
-    len = sprintf((char *) buf, HTTP_RESPONSE,
-                  mbedtls_ssl_get_ciphersuite(&ssl));
-
-    while ((ret = mbedtls_ssl_write(&ssl, buf, len)) <= 0) {
-        if (ret == MBEDTLS_ERR_NET_CONN_RESET) {
-            mbedtls_printf(" failed\n  ! peer closed the connection\n\n");
-            goto reset;
-        }
-
-        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
-            mbedtls_printf(" failed\n  ! mbedtls_ssl_write returned %d\n\n", ret);
+    while ((ret = mbedtls_ssl_handshake(&ssl)) != 0)
+    {
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
+        {
             goto exit;
         }
     }
 
-    len = ret;
-    mbedtls_printf(" %d bytes written\n\n%s\n", len, (char *) buf);
+    memset(buffer, 0, sizeof(buffer));
 
-    mbedtls_printf("  . Closing the connection...");
-    fflush(stdout);
+    ret = mbedtls_ssl_read( &ssl, buffer, sizeof(buffer) - 1);
 
-    while ((ret = mbedtls_ssl_close_notify(&ssl)) < 0) {
-        if (ret != MBEDTLS_ERR_SSL_WANT_READ &&
-            ret != MBEDTLS_ERR_SSL_WANT_WRITE &&
-            ret != MBEDTLS_ERR_NET_CONN_RESET) {
-            mbedtls_printf(" failed\n  ! mbedtls_ssl_close_notify returned %d\n\n", ret);
-            goto reset;
+    if (ret > 0)
+    {
+        printf("\nHTTP request:\n");
+        printf("%s\n", buffer);
+    }
+    else if (ret < 0)
+    {
+        goto exit;
+    }
+
+    size_t response_len = strlen(response);
+    size_t written = 0;
+
+    while (written < response_len)
+    {
+        ret = mbedtls_ssl_write( &ssl, (const unsigned char *) response + written, response_len - written);
+
+        if (ret > 0)
+        {
+            written += ret;
+        }
+        else if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
+        {
+            goto exit;
         }
     }
 
-    mbedtls_printf(" ok\n");
-    fflush(stdout);
+    printf("Response sent!\n");
+
+    mbedtls_ssl_close_notify(&ssl);
 
     ret = 0;
-    goto reset;
 
 exit:
 
-#ifdef MBEDTLS_ERROR_C
-    if (ret != 0) {
-        char error_buf[100];
-        mbedtls_strerror(ret, error_buf, 100);
-        mbedtls_printf("Last error was: %d - %s\n\n", ret, error_buf);
-    }
-#endif
-
     mbedtls_net_free(&client_fd);
     mbedtls_net_free(&listen_fd);
-    mbedtls_x509_crt_free(&srvcert);
-    mbedtls_pk_free(&pkey);
     mbedtls_ssl_free(&ssl);
     mbedtls_ssl_config_free(&conf);
+    mbedtls_x509_crt_free(&cert);
+    mbedtls_pk_free(&key);
     mbedtls_psa_crypto_free();
-
     mbedtls_exit(ret);
 }
