@@ -1,0 +1,21 @@
+( **** Proposal Uxntal TCP/IP-only socket libary **** )
+( WV 2025-09-20 )
+(
+The overall approach is that the Network address space is used to hand over arguments from user space to the socket calls.
+The Inet and Select address spaces overlap with the Network address space
+As all of them are stateless this is OK
+)
+
+( ** Network device layout ** )
+( I propose to use device address d0 )
+
+|d0 @Network ( 0 ) &socket $1 ( 1 ) &addr $2 ( 3 ) &opt $1 ( 4 ) &optval $1 ( 5 ) &buf $2 ( 7 ) &len $2 ( 9 ) &flags $1 ( 10 ) &status $1 ( 11 ) &call $1 ( 12 ) &type $2 ( 14 ) &unused $1 ( 15 ) &reserved $1 ( 16 )
+|d0 @Inet ( 0 ) &addr $2 ( 2 ) &hostname $2
+|d0 @Select ( 0 ) &nfds $1 ( 1 ) &fdsets $2 ( 3 ) &timeout $2
+
+( .Network/socket stores the socket descriptor )
+( .Network/addr stores a 2-byte pointer to a location which stores the IPv4 address and the port number in 6 bytes. Used for host and peer. 
+I'll add host name support via inet_addr, 64 bytes
+)
+( .Network/buf stores 2-byte a pointer to a location which stores the buffer content; .Network/buf stores the length of the buffer )
+( .Network/call is a byte identifying the POSIX call )

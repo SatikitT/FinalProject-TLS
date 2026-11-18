@@ -1,0 +1,57 @@
+~uxn-extension-device.tal
+~networking-devices.tal
+
+%LOCALHOST { #7f00 #0001 } ( 127.0.0.01 IPv4 address, 4 bytes )
+%INADDR_ANY { #0000 #0000 } ( IPv4 address, 4 bytes )
+%MYPORT { #0da2 } ( 3490 )
+
+%NOINFO { POP2 JMP2r }
+
+|0100
+@main
+  use-network
+( /**** open the server TCP socket */ )
+  ;dict/socket str/<print>
+  SOCK_STREAM socket DUP #ff EQU ?&error ( sfd )
+  
+  ( Set address and port )
+ LOCALHOST MYPORT ;hostaddr create_in_addr
+( /**** connect to server socket address */         )
+  ;dict/connect str/<print>
+  DUP ;hostaddr connect ?&error ( sfd )
+
+  ;dict/send str/<print>
+  DUP ;msg #0010 #00 send #0010 NEQ2 ?&error
+  ;dict/done str/<print>
+
+  close
+BRK
+&error
+;dict/error str/<print>
+BRK
+
+@msg "Hello, 20 "world! 0a 00 00
+
+
+~networking.tal
+
+( ** Example address and buffer storage, in the user program ** )
+( Referenced below using addr_ptr and buf_ptr )
+|1000
+@hostaddr &ipv4_addr $4 &port $2 
+@peeraddr &ipv4_addr $4 &port $2 
+@buf $400  ( 1 kB max, ad hoc )
+
+@str/<print> ( str* -- )
+  NOINFO
+	LDAk DUP ?{ POP POP2 JMP2r }
+	#18 DEO
+	INC2 !/<print>
+
+@dict
+	&socket "socket() 0a $1
+	&connect "connect() 0a $1
+	&send "send(msg) 0a $1  
+  &done "Done 0a $1
+  &error "Error  0a $1
+

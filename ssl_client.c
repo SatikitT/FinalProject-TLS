@@ -51,7 +51,12 @@ int main(void)
         goto exit;
     }
 
-    mbedtls_ssl_conf_authmode( &conf, MBEDTLS_SSL_VERIFY_NONE);
+    if ((ret = mbedtls_x509_crt_parse_file( &ca, "certs/ca.crt")) != 0)
+    {
+        goto exit;
+    }
+
+    mbedtls_ssl_conf_ca_chain(&conf, &ca, NULL);
 
     if ((ret = mbedtls_ssl_setup(&ssl, &conf)) != 0)
     {

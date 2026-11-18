@@ -1,0 +1,282 @@
+( **** Proposal Uxntal TCP/IP-only socket libary **** )
+( WV 2025-09-20 )
+(
+The overall approach is that the Network address space is used to hand over arguments from user space to the socket calls.
+The Inet and Select address spaces overlap with the Network address space
+As all of them are stateless this is OK
+)
+
+( ** Network device layout ** )
+( I propose to use device address d0 )
+(
+|d0 @Network ( 0 ) &socket $1 ( 1 ) &addr $2 ( 3 ) &opt $1 ( 4 ) &optval $1 ( 5 ) &buf $2 ( 7 ) &len $2 ( 9 ) &flags $1 ( 10 ) &status $1 ( 11 ) &call $1 ( 12 ) &type $2 ( 14 ) &bytes34 $2 ( 16 )
+|d0 @Inet ( 0 ) &addr $2 ( 2 ) &hostname $2
+|d0 @Select ( 0 ) &nfds $1 ( 1 ) &fdsets $2 ( 3 ) &timeout $2
+)
+( .Network/socket stores the socket descriptor )
+( .Network/addr stores a 2-byte pointer to a location which stores the IPv4 address and the port number in 6 bytes. Used for host and peer. 
+I'll add host name support via inet_addr, 64 bytes
+)
+( .Network/buf stores 2-byte a pointer to a location which stores the buffer content; .Network/buf stores the length of the buffer )
+( .Network/call is a byte identifying the POSIX call )
+
+( ** Uxntal API for the POSIX socket library calls ** )
+
+( Create a socket, return its descriptor )
+( If the sfd is 0xff, means error )
+( -- sfd:8 )
+@socket
+.Network/type DEO
+SOCKET .Network/call DEO
+.Network/socket DEI
+( .Network/status DEI )
+JMP2r
+
+( Set socket options, SOL_SOCKET level only )
+( sfd:8 opt:8 optval:8 -- status:8 )
+@setsockopt
+.Network/optval DEO
+.Network/opt DEO
+.Network/socket DEO
+SETSOCKOPT .Network/call DEO 
+.Network/status DEI
+JMP2r
+
+( Get socket options, SOL_SOCKET level only )
+( sfd:8 opt:8 -- optval:8 status:8 )
+@getsockopt 
+.Network/opt DEO 
+.Network/socket DEO
+GETSOCKOPT .Network/call DEO 
+.Network/opt DEI
+.Network/status DEI
+JMP2r
+
+( Connect the peer addr and port to the socket )
+( sfd:8 addr_ptr:16 -- status:8 )
+@connect
+SWP .Network/addr DEO2
+CONNECT .Network/call DEO 
+.Network/socket DEO
+.Network/status DEI
+JMP2r
+
+( Bind the host addr and port to the socket )
+( sfd:8 addr_ptr:16 -- status:8 )
+@bind
+SWP .Network/addr DEO2
+.Network/socket DEO
+BIND .Network/call DEO 
+.Network/status DEI
+JMP2r
+
+( Listen for connections )
+( sfd:8 -- status:8 )
+@listen
+.Network/socket DEO
+LISTEN .Network/call DEO 
+.Network/status DEI
+JMP2r
+
+( Accept a connection )
+( sfd:8 addr_ptr:16 -- status:8 )
+@accept 
+SWP .Network/addr DEO2
+.Network/socket DEO
+ACCEPT .Network/call DEO 
+.Network/socket DEI 
+JMP2r
+
+( Send a message )
+( sfd:8 buf_ptr:16 len:16  flags:8 -- len:16 )
+@send 
+.Network/flags DEO
+SWP .Network/len DEO2
+SWP .Network/buf DEO2
+.Network/socket DEO
+SEND .Network/call DEO
+.Network/len DEI2 SWP
+( .Network/status DEI )
+JMP2r
+
+( Receive a message )
+( sfd:8 buf_ptr:16 buf_sz:16 flags:8 -- len:16  )
+@recv 
+.Network/flags DEO
+SWP .Network/len DEO2
+SWP .Network/buf DEO2
+.Network/socket DEO
+RECV .Network/call DEO 
+.Network/len DEI2 SWP
+( .Network/status DEI )
+JMP2r
+
+( Close the socket )
+( sfd:8 -- status:8 )
+@close 
+.Network/socket DEO
+CLOSE .Network/call DEO 
+.Network/status DEI
+JMP2r
+
+
+( We need select as well, it's not part of the socket library )
+( I put nfds, fdsets and timeout in the Select pseudo-device  )
+( I propose to support only the read and write sets )
+( fdsets is preceded by a byte containing nfds )
+( In principle timeout is a timeval struct but I suggest a time in ms )
+( I use a pointer because otherwise we could only handle 8 clients )
+( Assuming nfds is a byte, if we want to support 128 clients we need 1+3*16  bytes if we don't support exceptfds )
+
+( we do
+ 
+@FD_sets &read $10 &write $10 &except $10 &nfds $1
+
+)
+
+( nfds:8 fd_sets_ptr:16 timeout:16 -- status:8 )
+( ;FD_sets/nfds ;FD_sets timeout:16 )
+@select 
+SWP .Select/timeout DEO2
+SWP .Select/fdsets DEO2 
+.Select/nfds DEO
+SELECT .Network/call DEO 
+.Network/status DEI
+JMP2r
+
+@calc_set_pos
+( the byte is fd >> 3 )
+( the position in the byte is fd - byte<<3 )
+ROT #ff SWP SUB ( because we are iterating from the lsb )
+DUP #03 SFT ( fd_set_ptr:16 fd bytepos )
+DUP #30 SFT ( fd_set_ptr:16 fd bytepos x )
+ROT SWP ( fd_set_ptr:16 bytepos fd x )
+SUB ( fd_set_ptr:16 bytepos bitpos )
+SWP ( fd_set_ptr:16 bitpos bytepos )
+SWP2 ( bitpos bytepos fd_set_ptr:16 )
+( byte to short )
+ROT #00 SWP 
+#0f SWP SUB ( bitpos fd_set_ptr:16 bytepos:16 )
+ADD2 DUP2 LDA ( bitpos byteaddr:16 byte ) 
+ROT ROT SWP2 ( byteaddr:16 bitpos byte ) 
+JMP2r
+( remove fd from the set )
+( every set is 16 bytes )
+@FD_SET ( fd:8 fd_set_ptr:16 )
+calc_set_pos
+SWP #01 SWP #40 SFT SFT ( byteaddr:16 byte 1<<bitpos )
+ORA 
+ROT ROT STA
+JMP2r
+
+@FD_CLR ( fd:8 fd_set_ptr:16 )
+calc_set_pos
+( make a hole at bitpos )
+SWP #01 SWP #40 SFT SFT ( byteaddr:16 byte 1<<bitpos )
+#ff SWP SUB ( byteaddr:16 byte mask )
+AND ( clear the bit )
+ROT ROT STA 
+JMP2r
+
+( test if fd is in the set )
+@FD_ISSET ( fd:8 fd_set_ptr:16 )
+calc_set_pos ( byteaddr:16 bitpos byte )
+SWP SFT 
+JMP2r
+
+( zero the set )
+@FD_ZERO ( fd_set_ptr:16 )
+    #0000 SWP2  ( idx:16 fd_set_ptr:16 ) 
+    &loop
+        OVR2 OVR2 ROT2 ( idx:16 idx:16 fd_set_ptr:16 fd_set_ptr:16 ) 
+        ROT2 DUP2 NIP #30 ADD #18 DEO
+        ADD2 ( idx:16 fd_set_ptr:16 fd_set_ptr:16+idx:16 ) 
+        #0000 SWP2 STA2 ( idx:16 fd_set_ptr:16; fd_set_ptr[idx]=0:16 )
+        SWP2 INC2 INC2 ( fd_set_ptr:16 idx:16+2 )
+        DUP2 ROT2 ROT2 ( idx:16+2 fd_set_ptr:16 idx:16+2 )
+        #0010 EQU2 ?&done
+    !&loop
+    &done
+JMP2r
+
+( I use the Inet pseudo-device )
+( hostname_ptr* addr_ptr* -- addr_ptr* )
+@inet_addr
+SWP .Inet/addr DEO2 
+SWP .Inet/hostname DEO2
+INET_ADDR .Network/call DEO
+.Inet/addr DEI2 SWP
+JMP2r
+
+
+@inet_ntoa ( addr_ptr* hostname_ptr* -- hostname_ptr* )
+SWP .Inet/hostname DEO2
+SWP .Inet/addr DEO2
+INET_NTOA .Network/call DEO
+.Inet/hostname DEI2 SWP
+JMP2r
+
+( ipv4_addr_b43:16 ipv4_addr_b21:16 port:16 in_addr:16 -- )
+( swaps are to get byte order right )
+@create_in_addr
+    DUP2 ( ipv4_addr_b43:16 ipv4_addr_b21:16 port:16 in_addr:16 in_addr:16 )
+    ROT2 ROT2 ( ipv4_addr_b43:16 ipv4_addr_b21:16 in_addr:16 port:16 in_addr:16  )
+    SWP2 SWP SWP2
+    #0004 ADD2 STA2 ( ipv4_addr_b43:16 ipv4_addr_b21:16 in_addr:16 )
+    ROT2 ROT2 SWP2 ROT2 ( swap the shorts 4321 => 21 43 )
+    SWP2 SWP SWP2 ( swapping bytes 43 => 34 )
+    DUP2 ROT2 ROT2 ( ipv4_addr_b43:16 in_addr:16 ipv4_addr_b21:16 in_addr:16 )
+    #0002 ADD2 STA2 ( ipv4_addr_b43:16 in_addr:16 )
+    SWP2 SWP SWP2 ( swapping bytes 21 => 12 )
+    STA2
+JMP2r
+
+@SOCKET #01 JMP2r
+@SETSOCKOPT #02 JMP2r
+@GETSOCKOPT #03 JMP2r
+@CONNECT #04 JMP2r
+@BIND #05 JMP2r
+@LISTEN #06 JMP2r
+@ACCEPT #07 JMP2r
+@SEND #08 JMP2r
+@RECV #09 JMP2r
+@CLOSE #0a JMP2r
+@SELECT #0b JMP2r
+@INET_ADDR #0c JMP2r
+@INET_NTOA #0d JMP2r
+
+( Socket options, Linux values )
+
+@SO_REUSEADDR #02 JMP2r
+@SO_TYPE #03 JMP2r
+@SO_ERROR #04 JMP2r
+@SO_DONTROUTE #05 JMP2r
+@SO_BROADCAST #06 JMP2r
+@SO_SNDBUF #07 JMP2r
+@SO_RCVBUF #08 JMP2r
+@SO_KEEPALIVE #09 JMP2r
+@SO_OOBINLINE #0a JMP2r
+@SO_LINGER #0d JMP2r
+@SO_RCVLOWAT #12 JMP2r
+@SO_SNDLOWAT #13 JMP2r
+@SO_ACCEPTCONN #1e JMP2r
+
+@SOCK_STREAM #01 JMP2r
+@SOCK_DGRAM #00 JMP2r
+
+( BSD
+#define	SO_ACCEPTCONN	0x0002		/* socket has had listen() */
+#define	SO_BROADCAST	0x0020		/* permit sending of broadcast msgs */
+#define	SO_DONTROUTE	0x0010		/* just use interface addresses */
+#define	SO_ERROR	0x1007		/* get error status and clear */
+#define	SO_KEEPALIVE	0x0008		/* keep connections alive */
+#define SO_LINGER	0x0080          /* linger on close if data present (in ticks) */
+#define	SO_OOBINLINE	0x0100		/* leave received OOB data in line */
+#define SO_RCVBUF	0x1002		/* receive buffer size */
+#define SO_RCVLOWAT	0x1004		/* receive low-water mark */
+#define	SO_REUSEADDR	0x0004		/* allow local address reuse */
+#define SO_SNDBUF	0x1001		/* send buffer size */
+#define SO_SNDLOWAT	0x1003		/* send low-water mark */
+#define	SO_TYPE		0x1008		/* get socket type */
+)
+

@@ -1,0 +1,18 @@
+|d0 @Extension $f &sel $1 
+
+(
+|d0 @Network ( 0 ) &socket $1 ( 1 ) &addr $2 ( 3 ) &opt $1 ( 4 ) &optval $1 ( 5 ) &buf $2 ( 7 ) &len $2 ( 9 ) &flags $1 ( 10 ) &status $1 ( 11 ) &call $1 ( 12 ) &type $2 ( 14 ) &unused $1 ( 15 ) &reserved $1 ( 16 )
+|d0 @Inet ( 0 ) &addr $2 ( 2 ) &hostname $2
+|d0 @Select ( 0 ) &nfds $1 ( 1 ) &fdsets $2 ( 3 ) &timeout $2
+
+|d0 @Threads &cmd $1 &errno $1 &a0 $2 &a1 $2 &a2 $2 &r0 $2 &uselocalstorage $1
+
+|d0 @Processes &vector $2 &command $1 &input $1 &register $1 &pointer $2
+
+|d0 @Parallel &ctrl $1 &lower $2 &upper $2 &id $2
+)
+
+%use-network { #01 .Extension/sel DEO }
+%use-threads { #02 .Extension/sel DEO }
+%use-process { #03 .Extension/sel DEO }
+%use-parallel { #04 .Extension/sel DEO }

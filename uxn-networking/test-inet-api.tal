@@ -1,0 +1,29 @@
+
+~networking-devices.tal
+|0100
+@main
+
+( hostname_ptr* addr_ptr* -- addr_ptr* )
+;hostipv4str ;addr inet_addr
+DUP2 LDA2 #7f00 EQU2 ( test bytes 4 and 3 )
+ROT ROT #0002 ADD2 LDA2 #0001 EQU2 ( test bytes 2 and 1 )
+AND #30 ADD #18 DEO #0a18 DEO
+
+( addr_ptr* hostname_ptr* -- hostname_ptr* )
+#c0a8 ;addr STA2 #0101 ;addr #0002 ADD2 STA2 
+;addr ;hostipv4str inet_ntoa
+    &whilebuf                  ( Create while label )
+    LDAk DUP ?{         ( Load byte at address, jump if not null )
+        POP POP2 #0a18 DEO BRK }  ( When null, pop text pointer, halt )
+    #18 DEO             ( Send byte to Console/write port )
+    INC2 !&whilebuf         ( Incr text pointer, jump to label )
+
+BRK
+
+@LOCALHOST #7f00 #0001 JMP2r ( 127.0.0.01 IPv4 address, 4 bytes )
+@INADDR_ANY #0000 #0000 JMP2r ( IPv4 address, 4 bytes )
+
+~networking.tal
+
+@hostipv4str "127.0.0.1 00
+@addr $4
