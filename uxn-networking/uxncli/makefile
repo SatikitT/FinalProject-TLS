@@ -4,7 +4,7 @@ DEBUG_flags=-std=c99 -D_POSIX_C_SOURCE=199309L -DDEBUG -Wall -Wno-unknown-pragma
 networking: ext
 ext: src/uxncli.c
 	@ mkdir -p bin/
-	cc -DEXTENSION -DEXT_NETWORKING -DEXT_TLS ${RELEASE_flags} src/uxncli.c -o bin/uxncli -lmbedtls -lmbedx509 -ltfpsacrypto
+	@ cc -DEXTENSION -DEXT_NETWORKING -DEXT_TLS ${RELEASE_flags} src/uxncli.c -o bin/uxncli -lmbedtls -lmbedx509 -ltfpsacrypto
 run: bin/uxncli bin/tictactoe.rom
 	@ bin/uxncli bin/tictactoe.rom
 test: bin/uxncli-debug tests
