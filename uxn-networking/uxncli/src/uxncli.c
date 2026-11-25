@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
+#include <arpa/inet.h>
 
 #ifdef EXTENSION
 #include <inttypes.h>
@@ -100,7 +101,7 @@ static void extension_deo(uint8_t addr) {
 		    case 0x01: network_deo(rel_addr); break;
 #endif	
 #ifdef EXT_TLS	    
-		    case 0x02: tls_deo(rel_addr); break;
+		    case 0x05: tls_deo(rel_addr); break;
 #endif		    
 /*		    case 0x02: parallel_deo(addr); break;
 		    case 0x03: threads_deo(addr); break;
@@ -541,6 +542,7 @@ void network_deo(Uint8 rel_addr) {
 #endif
 #endif
 
+
 #ifdef EXT_TLS
 
 #define TLS_CMD_INIT       0x01
@@ -550,118 +552,372 @@ void network_deo(Uint8 rel_addr) {
 #define TLS_CMD_WRITE      0x05
 #define TLS_CMD_READ       0x06
 #define TLS_CMD_CLOSE      0x07
+#define TLS_CMD_CONNECT    0x08
 
-#define TLS_DEVICE EXT_DEV_OFFSET+1
+#define TLS_DEVICE (EXT_DEV_OFFSET + 0x40)
 
-#define TLS_sfd			0x00
-#define TLS_buf			0x01
-#define TLS_len			0x03
-#define TLS_hostname	0x05
-#define TLS_status		0x07
-#define TLS_call		0x09
+#define TLS_mode      0x00
+#define TLS_buf       0x01
+#define TLS_len       0x03
+#define TLS_hostname  0x05
+#define TLS_status    0x07
+#define TLS_call      0x09
+#define TLS_port      0x0a
 
-mbedtls_net_context listen_fd;
-mbedtls_net_context client_fd;
+static mbedtls_net_context listen_fd, client_fd;
+static mbedtls_ssl_context ssl;
+static mbedtls_ssl_config conf;
+static mbedtls_x509_crt cert, ca;
+static mbedtls_pk_context key;
 
-mbedtls_ssl_context ssl;
-mbedtls_ssl_config conf;
+static int tls_initialized = 0;
+static int tls_server;
 
-mbedtls_x509_crt cert;
-mbedtls_pk_context key;
-
-void tls_init()
+static void tls_free(void)
 {
-	mbedtls_net_init(&listen_fd);
+    if (!tls_initialized)
+        return;
+
+    mbedtls_net_free(&client_fd);
+    mbedtls_net_free(&listen_fd);
+
+    mbedtls_ssl_free(&ssl);
+    mbedtls_ssl_config_free(&conf);
+
+    mbedtls_x509_crt_free(&cert);
+    mbedtls_x509_crt_free(&ca);
+    mbedtls_pk_free(&key);
+
+    tls_initialized = 0;
+}
+
+
+void tls_init(void)
+{
+	printf("TLS init\n");
+	
+    Uint16 cert_addr = peek2(dev + TLS_DEVICE + TLS_buf);
+    Uint16 key_addr = peek2(dev + TLS_DEVICE + TLS_len);
+
+    const char *cert_path = (const char *)(ram + cert_addr);
+    const char *key_path = (const char *)(ram + key_addr);
+
+    Uint8 mode = dev[TLS_DEVICE + TLS_mode];
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+
+    if (mode > 1)
+        return;
+
+    if (!memchr(cert_path, 0, 0x10000u - cert_addr))
+        return;
+
+    if (mode == 0 &&
+        !memchr(key_path, 0, 0x10000u - key_addr))
+        return;
+
+    tls_free();
+
+    tls_server = mode == 0;
+
+    if (psa_crypto_init() != PSA_SUCCESS)
+        return;
+
+    mbedtls_net_init(&listen_fd);
     mbedtls_net_init(&client_fd);
 
     mbedtls_ssl_init(&ssl);
     mbedtls_ssl_config_init(&conf);
 
     mbedtls_x509_crt_init(&cert);
+    mbedtls_x509_crt_init(&ca);
     mbedtls_pk_init(&key);
 
-	psa_crypto_init();
+    tls_initialized = 1;
 
-	mbedtls_ssl_config_defaults( &conf, MBEDTLS_SSL_IS_SERVER, MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
-
-	mbedtls_x509_crt_parse_file( &cert, "certs/server.crt")
-	mbedtls_pk_parse_keyfile( &key, "certs/server.key", NULL)
-	mbedtls_ssl_conf_own_cert( &conf, &cert, &key)
-
-	mbedtls_ssl_setup( &ssl, &conf)
-}
-
-void tls_bind()
-{
-	mbedtls_net_bind(&listen_fd, NULL, PORT, MBEDTLS_NET_PROTO_TCP)
-}
-
-void tls_accept()
-{
-	mbedtls_net_accept( &listen_fd, &client_fd, NULL, 0, NULL)
-	mbedtls_ssl_set_bio( &ssl, &client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
-}
-
-void tls_handshake()
-{
-	int ret;
-
-	while ((ret = mbedtls_ssl_handshake(&ssl)) != 0)
+    if (mbedtls_ssl_config_defaults(
+        &conf,
+        tls_server ? MBEDTLS_SSL_IS_SERVER : MBEDTLS_SSL_IS_CLIENT,
+        MBEDTLS_SSL_TRANSPORT_STREAM,
+        MBEDTLS_SSL_PRESET_DEFAULT) != 0)
     {
-        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
+        goto exit;
+    }
+
+    if (tls_server)
+    {
+        if (mbedtls_x509_crt_parse_file(&cert, cert_path) != 0)
+            goto exit;
+
+        if (mbedtls_pk_parse_keyfile(&key, key_path, NULL) != 0)
+            goto exit;
+
+        if (mbedtls_ssl_conf_own_cert(&conf, &cert, &key) != 0)
+            goto exit;
+    }
+    else
+    {
+        if (mbedtls_x509_crt_parse_file(&ca, cert_path) != 0)
+            goto exit;
+
+        mbedtls_ssl_conf_ca_chain(&conf, &ca, NULL);
+    }
+
+    if (mbedtls_ssl_setup(&ssl, &conf) != 0)
+        goto exit;
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0x0000);
+
+    return;
+
+exit:
+    tls_free();
+}
+
+
+void tls_bind(void)
+{
+    char port[6];
+    int ret;
+
+    if (!tls_initialized || !tls_server)
+    {
+        poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+        return;
+    }
+
+    snprintf(port, sizeof(port), "%u", (unsigned)peek2(dev + TLS_DEVICE + TLS_port));
+
+    ret = mbedtls_net_bind( &listen_fd, NULL, port, MBEDTLS_NET_PROTO_TCP);
+
+    if (ret != 0)
+        poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+    else
+        poke2(dev + TLS_DEVICE + TLS_status, 0x0000);
+}
+
+
+void tls_accept(void)
+{
+    int ret;
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+
+    if (!tls_initialized || !tls_server)
+        return;
+
+    if (mbedtls_ssl_session_reset(&ssl) != 0)
+        return;
+
+    mbedtls_net_free(&client_fd);
+
+    ret = mbedtls_net_accept(&listen_fd, &client_fd, NULL, 0, NULL);
+
+    if (ret != 0)
+        return;
+
+    mbedtls_ssl_set_bio( &ssl, &client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0x0000);
+}
+
+
+void tls_connect(void)
+{
+    int ret;
+    char port[6];
+
+    Uint16 addr = peek2(dev + TLS_DEVICE + TLS_hostname);
+    const char *host = (const char *)(ram + addr);
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+
+    if (!tls_initialized || tls_server)
+        return;
+
+    if (!addr || !*host || !memchr(host, 0, 0x10000u - addr))
+        return;
+
+    snprintf(port, sizeof(port), "%u", (unsigned)peek2(dev + TLS_DEVICE + TLS_port));
+
+    if (mbedtls_ssl_session_reset(&ssl) != 0)
+        return;
+
+    if (mbedtls_ssl_set_hostname(&ssl, host) != 0)
+        return;
+
+    mbedtls_net_free(&client_fd);
+
+    ret = mbedtls_net_connect( &client_fd, host, port, MBEDTLS_NET_PROTO_TCP);
+
+    if (ret != 0)
+        return;
+
+    mbedtls_ssl_set_bio( &ssl, &client_fd, mbedtls_net_send, mbedtls_net_recv, NULL);
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0x0000);
+}
+
+
+void tls_handshake(void)
+{
+    int ret;
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+
+    if (!tls_initialized)
+        return;
+
+    while ((ret = mbedtls_ssl_handshake(&ssl)) != 0)
+    {
+        if (ret != MBEDTLS_ERR_SSL_WANT_READ &&ret != MBEDTLS_ERR_SSL_WANT_WRITE)
         {
-            break;
+            tls_free();
+            return;
         }
     }
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0x0000);
 }
 
-void tls_write()
+
+void tls_write(void)
 {
+    int ret;
 
+    Uint16 addr = peek2(dev + TLS_DEVICE + TLS_buf);
+    Uint16 len = peek2(dev + TLS_DEVICE + TLS_len);
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+    poke2(dev + TLS_DEVICE + TLS_len, 0);
+
+    if (!tls_initialized)
+        return;
+
+    if ((unsigned)addr + len > 0x10000u)
+        return;
+
+    do
+    {
+        ret = mbedtls_ssl_write(&ssl, ram + addr, len);
+    }
+    while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE);
+
+    if (ret < 0)
+    {
+        tls_free();
+        return;
+    }
+
+    poke2(dev + TLS_DEVICE + TLS_len, (Uint16)ret);
+    poke2(dev + TLS_DEVICE + TLS_status, 0x0000);
 }
 
-void tls_read()
+
+void tls_read(void)
 {
+    int ret;
 
+    Uint16 addr = peek2(dev + TLS_DEVICE + TLS_buf);
+    Uint16 len = peek2(dev + TLS_DEVICE + TLS_len);
+
+    poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+    poke2(dev + TLS_DEVICE + TLS_len, 0);
+
+    if (!tls_initialized)
+        return;
+
+    if ((unsigned)addr + len > 0x10000u)
+        return;
+
+    do
+    {
+        ret = mbedtls_ssl_read(&ssl, ram + addr, len);
+    }
+    while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE);
+
+    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || ret == 0)
+    {
+        tls_free();
+        poke2(dev + TLS_DEVICE + TLS_status, 0x0001);
+        return;
+    }
+
+    if (ret < 0)
+    {
+        tls_free();
+        return;
+    }
+
+    poke2(dev + TLS_DEVICE + TLS_len, (Uint16)ret);
+    poke2(dev + TLS_DEVICE + TLS_status, 0x0000);
 }
+
+
+void tls_close(void)
+{
+    int ret = 0;
+
+    if (tls_initialized)
+    {
+        do
+        {
+            ret = mbedtls_ssl_close_notify(&ssl);
+        }
+        while (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE);
+
+        tls_free();
+    }
+
+    if (ret != 0)
+        poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+    else
+        poke2(dev + TLS_DEVICE + TLS_status, 0x0000);
+}
+
 
 void tls_deo(Uint8 rel_addr) {
-//    uint8_t rel_addr = (uint8_t)(addr - NET_DEVICE) ;
     uint16_t addr = TLS_DEVICE + rel_addr;
-#ifdef NET_DBG    
-    printf("DBG: tls_deo %d val %d \n",rel_addr,dev[addr]);
-#endif
-    if (rel_addr == NET_call) {    
+
+    if (rel_addr == TLS_call) {
         Uint8 value = dev[addr];
+
         switch (value) {
             case TLS_CMD_INIT:
                 tls_init();
                 break;
-			case TLS_CMD_BIND:
-                tls_init();
+            case TLS_CMD_BIND:
+                tls_bind();
                 break;
             case TLS_CMD_ACCEPT:
-                tls_init();
+                tls_accept();
+                break;
+            case TLS_CMD_CONNECT:
+                tls_connect();
                 break;
             case TLS_CMD_HANDSHAKE:
-                tls_init();
+                tls_handshake();
                 break;
             case TLS_CMD_WRITE:
-                tls_init();
+                tls_write();
                 break;
             case TLS_CMD_READ:
-                tls_init();
+                tls_read();
                 break;
             case TLS_CMD_CLOSE:
-                tls_init();
+                tls_close();
                 break;
             default:
-                break;              
+                poke2(dev + TLS_DEVICE + TLS_status, 0xffff);
+                break;
         }
+		printf("TLS cmd: %02x, status: %04x\n", value, peek2(dev + TLS_DEVICE + TLS_status));
     }
 }
+
 #endif
 #endif
+
 
 /* 
 @|System ------------------------------------------------------------ */

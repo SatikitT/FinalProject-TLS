@@ -41,9 +41,11 @@ int main(void)
     mbedtls_x509_crt_init(&cert);
     mbedtls_pk_init(&key);
 
-    if (status != psa_crypto_init())
+    status = psa_crypto_init();
+
+    if (status != PSA_SUCCESS)
     {
-        printf("psa_crypto_init failed %d\n", (int) status);
+        printf("psa failed %d\n", (int) status);
         ret = 1;
         goto exit;
     }

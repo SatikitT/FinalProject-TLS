@@ -1,0 +1,37 @@
+~uxn-extension-device.tal
+~mbedtls-devices.tal
+
+|0100
+@main
+    #05 .Extension/sel DEO
+
+    #00 .TLS/mode DEO
+    ;cert-path .TLS/buf DEO2
+    ;key-path .TLS/len DEO2
+    #01 .TLS/call DEO
+
+    #0da2 .TLS/port DEO2
+    #02 .TLS/call DEO
+
+    #03 .TLS/call DEO
+
+    #04 .TLS/call DEO
+
+    ;buffer .TLS/buf DEO2
+    #0400 .TLS/len DEO2
+    #06 .TLS/call DEO
+
+    ;response .TLS/buf DEO2
+    #0013 .TLS/len DEO2
+    #05 .TLS/call DEO
+
+    #07 .TLS/call DEO
+
+BRK
+
+@cert-path "../certs/server.crt 00
+@key-path "../certs/server.key 00
+
+@response "Hello 20 "World! 00
+
+@buffer $400

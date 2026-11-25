@@ -16,3 +16,4 @@
 %use-threads { #02 .Extension/sel DEO }
 %use-process { #03 .Extension/sel DEO }
 %use-parallel { #04 .Extension/sel DEO }
+%use-tls { #05 .Extension/sel DEO }
